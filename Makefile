@@ -1,8 +1,10 @@
 build:
-	gcc -Wall -o app.o src/main.c src/client.c src/server.c src/utils.c
-
+	gcc -Wall -o client.o src/client.c
+	gcc -Wall -o server.o src/server.c
 clean:
-	rm app.o
+	rm client.o
+	rm server.o
 
 run:
-	./app.o
+	./client.o
+	./server.o
