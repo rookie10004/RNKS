@@ -1,10 +1,11 @@
-build:
-	gcc -Wall -o client.o src/client.c
-	gcc -Wall -o server.o src/server.c
-clean:
-	rm client.o
-	rm server.o
+all: client server
 
-run:
-	./client.o
-	./server.o
+client: 
+	gcc -Wall -o client src/client.c src/clientSy.c src/error.c
+
+server:
+	gcc -Wall -o server src/server.c src/serverSy.c src/error.c
+
+clean:
+	rm -f client server
+
