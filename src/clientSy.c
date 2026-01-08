@@ -42,7 +42,7 @@
  *   - GBN-Sendezustand (Fensterbasis, nächster freier Platz etc.)
  */
 
-int sockedFd = -1; //! socked file descriptor
+int socketFd = -1; //! socked file descriptor
 struct sockaddr_storage serverAddr; //! server adresse
 socklen_t serverAddrLen = 0; //! Länge IPv6 Adresse (die wir wirklich nutzen)
 
@@ -65,7 +65,7 @@ void initClient(char *name, const char *port)
     //! adress suche
     struct addrinfo hints;      //! anfrage formular
     struct addrinfo *result;    //! suchergebnis (liste) 
-    
+
     memset(&hints, 0, sizeof(struct addrinfo)); //! hints speicher auf 0
     hints.ai_family = AF_INET6;    //! nur ipv6 adressen suchen
     hints.ai_socktype = SOCK_DGRAM; //! UDP (Datagramme) nutzen
@@ -74,7 +74,7 @@ void initClient(char *name, const char *port)
     status = getaddrinfo(name, port, &hints, &result); //! suche für name, port, hints, gibt liste von addrinfos zurück
     if (status != 0) 
     {
-        fprintf(stderr, "error getaddrinfo");
+        fprintf(stderr, "client getaddrinfo error");
         exit(EXIT_FAILURE);
     }
 
@@ -82,9 +82,9 @@ void initClient(char *name, const char *port)
     for (current = result; current != NULL; current = current->ai_next) //! ergebnisse durchgehen (linked list, server kann mehrere adressen haben (ipv4 und ipv6))
     {
         //! socket erstellen von erstem funktionierenden eintrag
-        sockedFd = socket(current->ai_family, current->ai_socktype, current->ai_protocol);
+        socketFd = socket(current->ai_family, current->ai_socktype, current->ai_protocol);
         
-        if (sockedFd == -1) //! nächster eintrag, bis erfolgreich
+        if (socketFd == -1) //! nächster eintrag, bis erfolgreich
         {
 
             continue; 
@@ -102,7 +102,7 @@ void initClient(char *name, const char *port)
 
     if (current == NULL) //! testen ob überhaupt ein socket erstellt wurde oder (Ende der Liste erreicht)
     {
-        fprintf(stderr, "kein socket für %s, %s\n", name, port);
+        fprintf(stderr, "client kein socket für %s, %s\n", name, port);
         exit(EXIT_FAILURE);
     }
     
@@ -116,10 +116,10 @@ void closeClient(void)
      *  - globale Zustandsvariablen zurücksetzen
      */
 
-    if (sockedFd >= 0) //! wenn offenes socket, dann schließen
+    if (socketFd >= 0) //! wenn offenes socket, dann schließen
     {
-        close(sockedFd); 
-        sockedFd = -1;   
+        close(socketFd); 
+        socketFd = -1;   
     }
 }
 
@@ -175,7 +175,7 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
 
 int arqSendHello(int winSize)
 {
-    (void)winSize;
+    //(void)winSize;
 
     /* TODO:
      *  - struct request für Hello vorbereiten (ReqType = ReqHello)
@@ -184,7 +184,62 @@ int arqSendHello(int winSize)
      *  - Antwort auswerten (AnswHello / AnswOk)
      *  - bei Fehler einen Wert != 0 zurückgeben
      */
-    return 0;
+
+    struct request req;     //! paket zu senden
+    ssize_t numBytes;       //! anzahl gesendet/empfangen
+
+    //! request ausfüllen
+    memset(&req, 0, sizeof(req));   //! speicher auf 0
+    req.ReqType = ReqHello;         
+    req.SeNr = 0;                   
+    req.FlNr = 0;                   
+
+    printf("client sendet hallo...\n");
+
+    //! request über socket an server senden
+    numBytes = sendto(socketFd, 
+                      &req,
+                      sizeof(req), 
+                      0, 
+                      (struct sockaddr *)&serverAddr, //! addresse generisch casten
+                      serverAddrLen);
+
+    if (numBytes < 0) //! testen wieviele bytes gesendet
+    {
+        perror("clietn sendto error");
+        return -1;
+    }
+
+    struct sockaddr_storage senderAddr; //! addresse wer geantwortet hat
+    socklen_t addrLen;    
+    struct answer ack;      //! antwort
+
+    //! auf antwort warten (!blocking!)
+    addrLen = sizeof(senderAddr);
+    
+    numBytes = recvfrom(socketFd, 
+                        &ack, //! quittung
+                        sizeof(ack), 
+                        0, 
+                        (struct sockaddr *)&senderAddr,
+                        &addrLen);
+
+    if (numBytes < 0) //! testen wieviele bytes gesendet
+    {
+        perror("client recvfrom error");
+        return -1;
+    }
+
+    //! prüfen ob antwort AnswHello / AnswOk
+    if (ack.AnswType == AnswHello || ack.AnswType == AnswOk) 
+    {
+        printf("client HELLO verbindung\n");
+        return 0; 
+    } else 
+    {
+        fprintf(stderr, "client ack error: %c\n", ack.AnswType);
+        return 1; 
+    }
 }
 
 int arqSendData(const struct app_unit *app, int winSize)
