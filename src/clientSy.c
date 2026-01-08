@@ -1,8 +1,9 @@
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
-#include <stdlib.h>
+#include <stdio.h> 
+#include <string.h> 
+#include <errno.h> 
+#include <stdlib.h> 
 #include <unistd.h>
+
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -41,21 +42,71 @@
  *   - GBN-Sendezustand (Fensterbasis, nächster freier Platz etc.)
  */
 
+int sockedFd = -1; //! socked file descriptor
+struct sockaddr_storage serverAddr; //! server adresse
+socklen_t serverAddrLen = 0; //! Länge IPv6 Adresse (die wir wirklich nutzen)
+
 /* --------------------------------------------------------------- */
 /*  Initialisierung / Abschluss                                   */
 /* --------------------------------------------------------------- */
 
 void initClient(char *name, const char *port)
 {
-    (void)name;
-    (void)port;
+    // (void)name;
+    // (void)port;
 
     /* TODO:
      *  - mit getaddrinfo(...) die Serveradresse ermitteln
      *  - UDP/IPv6-Socket erzeugen
      *  - Socket non-blocking setzen (fcntl)
      *  - Adresse und Socket in globalen Variablen speichern
-     */
+    */
+
+    //! adress suche
+    struct addrinfo hints;      //! anfrage formular
+    struct addrinfo *result;    //! suchergebnis (liste) 
+    
+    memset(&hints, 0, sizeof(struct addrinfo)); //! hints speicher auf 0
+    hints.ai_family = AF_INET6;    //! nur ipv6 adressen suchen
+    hints.ai_socktype = SOCK_DGRAM; //! UDP (Datagramme) nutzen
+    
+    int status;                 //! fehlerprüfung
+    status = getaddrinfo(name, port, &hints, &result); //! suche für name, port, hints, gibt liste von addrinfos zurück
+    if (status != 0) 
+    {
+        fprintf(stderr, "error getaddrinfo");
+        exit(EXIT_FAILURE);
+    }
+
+    struct addrinfo* current;
+    for (current = result; current != NULL; current = current->ai_next) //! ergebnisse durchgehen (linked list, server kann mehrere adressen haben (ipv4 und ipv6))
+    {
+        //! socket erstellen von erstem funktionierenden eintrag
+        sockedFd = socket(current->ai_family, current->ai_socktype, current->ai_protocol);
+        
+        if (sockedFd == -1) //! nächster eintrag, bis erfolgreich
+        {
+
+            continue; 
+        }
+        
+        //! gefundene adresse in global variable kopieren
+        memcpy(&serverAddr, current->ai_addr, current->ai_addrlen);
+        serverAddrLen = current->ai_addrlen; 
+
+        break; 
+    }
+
+    //! liste freigeben 
+    freeaddrinfo(result); 
+
+    if (current == NULL) //! testen ob überhaupt ein socket erstellt wurde oder (Ende der Liste erreicht)
+    {
+        fprintf(stderr, "kein socket für %s, %s\n", name, port);
+        exit(EXIT_FAILURE);
+    }
+    
+    printf("client init für %s, %s\n", name, port);
 }
 
 void closeClient(void)
@@ -64,6 +115,12 @@ void closeClient(void)
      *  - ggf. offenen Socket schließen
      *  - globale Zustandsvariablen zurücksetzen
      */
+
+    if (sockedFd >= 0) //! wenn offenes socket, dann schließen
+    {
+        close(sockedFd); 
+        sockedFd = -1;   
+    }
 }
 
 /* --------------------------------------------------------------- */
