@@ -28,13 +28,33 @@ static void usage(const char *progName)
  *        > 0 : EOF (keine Daten mehr)
  *        < 0 : Fehler (z.B. ferror(f) != 0)
  */
+
 static int readAppUnit(struct app_unit *app, FILE *f)
 {
-    (void)app;
-    (void)f;
+    if (f == NULL || app == NULL) //! prüfen ob datei leer
+    {
+        return -1;
+    }
+    
+    memset(app->data, 0, BufferSize); //! speicher auf 0
+    app->len = 0;
+    
+    size_t itemsRead; //! wieviel bytes wirklich gelesen 
+    itemsRead = fread(app->data, 1, BufferSize, f); //! 512 bytes lesen von file in daten
 
-//TODO
+    if (itemsRead > 0) //! daten erfolgreich gelesen
+    {
+        app->len = itemsRead;
+        return 1;
+    }
 
+    if (feof(f)) //! ende der datei erreicht
+    {
+        return 0;
+    }
+
+    perror("client error datei lesen");
+    return -1;
 }
 
 int main(int argc, char *argv[])
@@ -106,7 +126,13 @@ int main(int argc, char *argv[])
      *   - bei Fehler: perror / Fehlermeldung und EXIT_FAILURE
      *   - bei Erfolg: FILE* in fp ablegen
      */
-    (void)fp; /* Platzhalter, damit der Compiler nicht warnt */
+
+    fp = fopen(filename, "rb"); //! datei in binary read öffnen
+    if (fp == NULL) 
+    {
+        perror("client error datei oeffnen");
+        exit(EXIT_FAILURE);
+    }
 
     printf("Client: sending file '%s'\n", filename);
 
@@ -126,15 +152,43 @@ int main(int argc, char *argv[])
      *
      *   - Fehlerfall (readAppUnit(..) < 0) behandeln
      */
+    
+    struct app_unit app; //! app zu senden
+    unsigned long packetCounter = 0; //! anzahl gesendete pakete
+    
+    int res;
+    while ((res = readAppUnit(&app, fp)) > 0) //! solange wie daten gelesen werden
     {
-        struct app_unit app;
-      
-        (void)app;
-       
+        packetCounter++;
+        
+        //! gelesene app + fenstergröße senden
+        if (arqSendData(&app, atoi(windowSize)) != 0) //! solange wie senden erfolgreich
+        {
+            fprintf(stderr, "client error senden %lu\n", packetCounter);
+            closeClient(); 
+
+            if (fp) //! file pointer schließen
+            {
+                fclose(fp);
+                return EXIT_FAILURE;
+            }
+        }
     }
 
+    //! prüfen ob erfolgreich gelesen / verpackt
+    if (res < 0) 
+    {
+        fprintf(stderr, "client error lesefehler\n");
+    } 
+    else 
+    {
+        printf("datei erfolgreich gesendet (%lu pakete)\n", packetCounter);
+    }
+    
+
     /* Close / Verbindungsabbau */
-    if (arqSendClose(atoi(windowSize)) != 0) {
+    if (arqSendClose(atoi(windowSize)) != 0) 
+    {
         fprintf(stderr, "Client: error while sending close.\n");
     }
 

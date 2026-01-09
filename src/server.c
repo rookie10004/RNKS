@@ -42,6 +42,16 @@ static int appStartTransfer(void)
      *   - bei Fehler Fehlermeldung ausgeben und <0 zurückgeben
      */
 
+    gFp = fopen(gOutputFile, "wb"); //! file in write binary öffnen
+
+    if (gFp == NULL) 
+    {
+        perror("server error opening file");
+        return -1;
+    }
+
+    gFileOk = 1; //! flag setzen
+
     printf("Server: start transfer -> writing to '%s'\n", gOutputFile);
     return 0;
 }
@@ -55,9 +65,18 @@ static int appWriteData(const char *buf, unsigned long len)
      *   - bei Fehler <0 zurückgeben
      *   - bei Erfolg 0 zurückgeben
      */
-    (void)buf;
-    (void)len;
-    return 0;
+
+    
+    if (!gFileOk || gFp == NULL) //! testen ob file okay
+    {
+        fprintf(stderr, "server error file stuff\n");
+        return -1;
+    }
+    
+    //! buffer in datei schreiben
+    fwrite(buf, 1, len, gFp);
+
+    return 0; 
 }
 
 /* Datei schließen. */
@@ -68,6 +87,17 @@ static void appEndTransfer(void)
      *   - gFp auf NULL setzen
      *   - gFileOk zurücksetzen
      */
+
+     //! datei schließen
+    if (gFp != NULL) 
+    {
+        fclose(gFp);
+        gFp = NULL; 
+        printf("server file close\n");
+    }
+
+    /* Status zurücksetzen */
+    gFileOk = 0;
 }
 
 /* --- main: Argumente auswerten, ARQ-Schicht starten --- */

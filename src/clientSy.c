@@ -52,9 +52,6 @@ socklen_t serverAddrLen = 0; //! Länge IPv6 Adresse (die wir wirklich nutzen)
 
 void initClient(char *name, const char *port)
 {
-    // (void)name;
-    // (void)port;
-
     /* TODO:
      *  - mit getaddrinfo(...) die Serveradresse ermitteln
      *  - UDP/IPv6-Socket erzeugen
@@ -86,7 +83,6 @@ void initClient(char *name, const char *port)
         
         if (socketFd == -1) //! nächster eintrag, bis erfolgreich
         {
-
             continue; 
         }
         
@@ -175,7 +171,6 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
 
 int arqSendHello(int winSize)
 {
-    //(void)winSize;
 
     /* TODO:
      *  - struct request für Hello vorbereiten (ReqType = ReqHello)
@@ -194,19 +189,19 @@ int arqSendHello(int winSize)
     req.SeNr = 0;                   
     req.FlNr = 0;                   
 
-    printf("client sendet hallo...\n");
+    printf("client sendet HALLO\n");
 
     //! request über socket an server senden
     numBytes = sendto(socketFd, 
                       &req,
                       sizeof(req), 
                       0, 
-                      (struct sockaddr *)&serverAddr, //! addresse generisch casten
+                      (struct sockaddr*)&serverAddr, //! addresse generisch casten
                       serverAddrLen);
 
     if (numBytes < 0) //! testen wieviele bytes gesendet
     {
-        perror("clietn sendto error");
+        perror("client sendto error");
         return -1;
     }
 
@@ -221,10 +216,10 @@ int arqSendHello(int winSize)
                         &ack, //! quittung
                         sizeof(ack), 
                         0, 
-                        (struct sockaddr *)&senderAddr,
+                        (struct sockaddr*)&senderAddr,
                         &addrLen);
 
-    if (numBytes < 0) //! testen wieviele bytes gesendet
+    if (numBytes < 0) //! testen wieviele bytes empfangen
     {
         perror("client recvfrom error");
         return -1;
@@ -244,9 +239,6 @@ int arqSendHello(int winSize)
 
 int arqSendData(const struct app_unit *app, int winSize)
 {
-    (void)app;
-    (void)winSize;
-
     /* TODO:
      *  - aus app eine struct request mit ReqType = ReqData erzeugen:
      *       * FlNr = app->len (ggf. begrenzen auf PufferSize)
@@ -257,18 +249,126 @@ int arqSendData(const struct app_unit *app, int winSize)
 	 *  - bei bufferFull oder retransmission doRequest mit unverändertem req erneut aufrufen
      *  - bei Fehler einen Wert != 0 zurückgeben
      */
-    return 0;
+    
+    static unsigned long currentSeqNum = 1; //! zähler für pakete
+
+    struct request req; //! paket vom client
+    
+    //! header ausfüllen
+    memset(&req, 0, sizeof(req)); //! speicher auf 0
+    req.ReqType = ReqData; //! typ ist DATA
+    req.SeNr = currentSeqNum; //! aktuelle paket nummer
+    req.FlNr = app->len; //! bytes an nutzdaten
+    
+    memcpy(req.name, app->data, app->len); //! daten in "name" kopieren
+    
+    printf("client paket nr. %lu (%lu bytes)\n", req.SeNr, req.FlNr);
+
+    //! daten senden
+    ssize_t numBytes;
+    numBytes = sendto(socketFd, 
+        &req, sizeof(req), 
+        0, 
+        (struct sockaddr*)&serverAddr, serverAddrLen);
+    
+    if (numBytes < 0) 
+    {
+        perror("cleint error sendto");
+        return -1;
+    }
+    
+    //! auf bestätigung warten (blockierend)
+    struct answer ack; //! paket vom server
+    socklen_t addrLen;
+    struct sockaddr_storage senderAddr;
+    addrLen = sizeof(senderAddr);
+    memset(&ack, 0, sizeof(ack)); //! speicher auf 0
+
+    numBytes = recvfrom(socketFd, 
+                        &ack, sizeof(ack), 
+                        0, 
+                        (struct sockaddr*)&senderAddr, &addrLen);
+
+    if (numBytes < 0) 
+    {
+        perror("client error recvfrom");
+        return -1;
+    }
+
+    if (ack.AnswType == AnswOk) //! server reagiert mit OK
+    {
+        printf("client paket %lu bestaetigt\n", currentSeqNum);
+
+        currentSeqNum++; //! zähler erhöht
+        
+        return 0;
+        
+    } 
+    else if (ack.AnswType == AnswErr) 
+    { 
+        fprintf(stderr, "client error vom server\n");
+        return 1;
+    }
+    else 
+    {
+        fprintf(stderr, "client ack error %c\n", ack.AnswType);
+        return 1;
+    }
 }
 
 int arqSendClose(int winSize)
 {
-    (void)winSize;
-
     /* TODO:
      *  - struct request mit ReqClose vorbereiten
      *  - doRequest(...) aufrufen
      *  - Antwort auswerten
      *  - bei Fehler einen Wert != 0 zurückgeben
      */
-    return 0;
+  
+    struct request req;
+    struct answer ack;
+    ssize_t numBytes;
+    socklen_t addrLen;
+    struct sockaddr_storage senderAddr;
+
+    memset(&req, 0, sizeof(req));
+    req.ReqType = ReqClose;
+    req.SeNr = 0;
+    req.FlNr = 0;
+
+    printf("client sende close\n");
+
+    numBytes = sendto(socketFd, 
+                      &req, sizeof(req), 
+                      0, 
+                      (struct sockaddr *)&serverAddr, serverAddrLen);
+
+    if (numBytes < 0) 
+    {
+        perror("client error sendto (close)");
+        return -1;
+    }
+
+    addrLen = sizeof(senderAddr);
+    numBytes = recvfrom(socketFd, 
+                        &ack, sizeof(ack), 
+                        0, 
+                        (struct sockaddr *)&senderAddr, &addrLen);
+
+    if (numBytes < 0) 
+    {
+        perror("client error revcfrom (ack-close)");
+        return -1;
+    }
+
+    if (ack.AnswType == AnswOk) 
+    {
+        printf("client close bestätigt\n");
+        return 0;
+    } 
+    else {
+
+        fprintf(stderr, "client error close abgelehnt\n");
+        return 1;
+    }
 }

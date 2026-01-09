@@ -1,6 +1,6 @@
 all: client server
-
-client: 
+	
+client:
 	gcc -Wall -o build/client src/client.c src/clientSy.c src/error.c
 
 server:
@@ -10,8 +10,8 @@ clean:
 	rm -f build/client build/server
 
 rs:
-	./build/server
+	./build/server -f output
 
 rc:
-	./build/client
+	./build/client -f input
 

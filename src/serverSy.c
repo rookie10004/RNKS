@@ -36,11 +36,14 @@
  *   - Zeiger auf die Anwendungscallbacks
  */
 
-
 struct sockaddr_storage clientAddr; //! wer hat gesendet
 socklen_t clientAddrLen = 0;        
 int socketFd = -1;                    //!socket file descriptor
 
+//! callbacks für process request / function pointer
+static appStartFn appStartCallback = NULL;
+static appWriteFn appWriteCallback = NULL;
+static appEndFn appEndCallback = NULL;
 
 /* --------------------------------------------------------------- */
 /*  SAP-Schicht (UDP)                                              */
@@ -48,8 +51,6 @@ int socketFd = -1;                    //!socket file descriptor
 
 int initServer(const char *port)
 {
-    //(void)port;
-
     /* TODO:
      *  - mit getaddrinfo(NULL, port, ...) eine lokale Adresse für UDP/IPv6
      *    ermitteln
@@ -70,7 +71,7 @@ int initServer(const char *port)
     
     //!eigene Adressen suchen / hören
     int status;
-    status = getaddrinfo(NULL, port, &hints, &result); //! NULL weil wir keine fremde IP suchen, (::) jedes Paket nehmen
+    status = getaddrinfo(NULL, port, &hints, &result); //! NULL weil wir keine fremde IP suchen, (::1 loopback) jedes Paket nehmen
     if (status != 0) 
     {
         fprintf(stderr, "server getaddrinfo error\n");
@@ -119,7 +120,7 @@ struct request *getRequest(void)
     *  - bei Fehler oder wenn keine Daten vorliegen: NULL zurückgeben
     */
 
-    static struct request req; 
+    static struct request req; //! zu empfangende request
     
     ssize_t numBytes;
 
@@ -130,7 +131,7 @@ struct request *getRequest(void)
                         &req, //! gesendette bytes werden geschrieben
                         sizeof(req), 
                         0, 
-                        (struct sockaddr *)&clientAddr, //!absender adresse wird geschrieben
+                        (struct sockaddr*)&clientAddr, //!absender adresse wird geschrieben
                         &clientAddrLen);
 
     if (numBytes < 0) //! testen wieviele bytes empfangen
@@ -144,8 +145,6 @@ struct request *getRequest(void)
 
 int sendAnswer(struct answer *answerPtr)
 {
-    //(void)answerPtr;
-
     /* TODO:
      *  - mit sendto(...) eine Antwort an die zuletzt bekannte
      *    Client-Adresse schicken
@@ -159,7 +158,7 @@ int sendAnswer(struct answer *answerPtr)
                       answerPtr,
                       sizeof(struct answer), 
                       0, 
-                      (struct sockaddr *)&clientAddr,
+                      (struct sockaddr*)&clientAddr,
                       clientAddrLen);
 
     if (numBytes < 0) //! testen wieviele bytes gesendet
@@ -220,21 +219,78 @@ int exitServer(void)
  *   - Zeiger auf ausgefüllte Antwortstruktur (answPtr)
  *   - NULL, wenn das Request-Paket vollständig verworfen wurde
  */
+
 static struct answer *processRequest(struct request *reqPtr,
                                      struct answer *answPtr,
                                      double lossReq)
 {
-    (void)reqPtr;
-    (void)answPtr;
-    (void)lossReq;
-
     /* TODO:
      *  - Paketverlust über lossReq simulieren
      *  - je nach ReqType (ReqHello / ReqData / ReqClose) handeln
      *  - Antwort (AnswType, SeNo/ErrNo) setzen
      *  - bei verworfenem Request NULL zurückgeben
      */
-    return NULL;
+
+    double randomNum = (double)rand() / (double)RAND_MAX; //! zahl zwischen 0 und 1
+    if (lossReq > 0.0 && randomNum < lossReq) //! paketverlust simulieren
+    {
+        printf("server paketverlust\n");
+        return NULL; 
+    }
+
+    if (reqPtr == NULL) //! test ob reqPtr gültig
+    {
+        return NULL;
+    }
+
+    memset(answPtr, 0, sizeof(struct answer)); //! speicher auf 0
+
+    //! reqest auswerten
+    switch (reqPtr->ReqType) 
+    {
+        case ReqHello:
+            printf("server HELLO empfangen\n");
+            
+            //! datei / app starten (callback)
+            if (appStartCallback() < 0) 
+            {
+                answPtr->AnswType = AnswErr; 
+            } 
+            else 
+            {
+                answPtr->AnswType = AnswOk;  
+                answPtr->SeNo = 0; 
+            }
+            break;
+
+        case ReqData:
+            //! daten schreiben (callabck)
+            if (appWriteCallback(reqPtr->name, reqPtr->FlNr) < 0) 
+            {
+                printf("server error schreiben\n");
+                answPtr->AnswType = AnswErr;
+            } 
+            else 
+            {
+                answPtr->AnswType = AnswOk;  
+                answPtr->SeNo = reqPtr->SeNr;
+            }
+            break;
+            
+        case ReqClose:
+            printf("server close empfangen \n");
+            
+            //! datei schließen (callback)
+            appEndCallback();
+            
+            answPtr->AnswType = AnswOk;
+            break;
+
+        default:
+            return NULL;
+    }
+
+    return answPtr;
 }
 
 /* --------------------------------------------------------------- */
@@ -248,13 +304,6 @@ int arqServerLoop(const char *port,
                   appWriteFn appWrite,
                   appEndFn appEnd)
 {
-    (void)port;
-    (void)lossReq;
-    (void)lossAck;
-    (void)appStart;
-    (void)appWrite;
-    (void)appEnd;
-
     /* TODO:
      *  - Callbacks in globalen Variablen speichern oder für Weiterreichen 
 	 *    Parameterliste in processRequest erweitern
@@ -268,5 +317,48 @@ int arqServerLoop(const char *port,
      *       * bei "kein ACK-Verlust": sendAnswer(..) aufrufen
      *  - exitServer() im Fehlerfall oder bei Beenden verwenden
      */
-    return -1;
+
+    appStartCallback = appStart;
+    appWriteCallback = appWrite;
+    appEndCallback   = appEnd;
+
+    struct request* req; //! zu bekommende request
+    static struct answer answ; //! answer
+    struct answer* answPtr; //! fertige answer
+
+    if (initServer(port) != 0) //! kein port --> beenden
+    {
+        return -1;
+    }
+
+    printf("server wartet auf pakete\n");
+
+    while (1) 
+    {
+        req = getRequest(); //! warten bis paket vom client
+        
+        if (req == NULL) //! testen ob request leer
+        {
+            continue;
+        }
+
+        answPtr = processRequest(req, &answ, lossReq); //! paket verarbeiten und answer formulieren
+
+        if (answPtr == NULL) //! request verlust simuliert
+        {
+            continue;
+        }
+
+        double randomNum = (double)rand() / (double)RAND_MAX; //! zahl zwischen 0 und 1
+        if (lossAck > 0.0 && randomNum < lossAck) //! ack verlust simulieren
+        {
+            printf("server ack verlust\n");
+            continue;
+        }
+
+        sendAnswer(answPtr); //! sende antwort
+    }
+
+    exitServer();
+    return 0;
 }
