@@ -225,11 +225,14 @@ static struct answer *processRequest(struct request *reqPtr,
                                      double lossReq)
 {
     /* TODO:
-     *  - Paketverlust über lossReq simulieren
-     *  - je nach ReqType (ReqHello / ReqData / ReqClose) handeln
-     *  - Antwort (AnswType, SeNo/ErrNo) setzen
-     *  - bei verworfenem Request NULL zurückgeben
+     * - Paketverlust über lossReq simulieren
+     * - je nach ReqType (ReqHello / ReqData / ReqClose) handeln
+     * - Antwort (AnswType, SeNo/ErrNo) setzen
+     * - bei verworfenem Request NULL zurückgeben
      */
+
+    //! welches paket als nächstes erwartet
+    static unsigned long nextExpectedSeNr = 1;
 
     double randomNum = (double)rand() / (double)RAND_MAX; //! zahl zwischen 0 und 1
     if (lossReq > 0.0 && randomNum < lossReq) //! paketverlust simulieren
@@ -248,9 +251,13 @@ static struct answer *processRequest(struct request *reqPtr,
     //! reqest auswerten
     switch (reqPtr->ReqType) 
     {
+        //! neue verbindung
         case ReqHello:
             printf("server HELLO empfangen\n");
             
+            //! erwartetes paket zurücksetzen
+            nextExpectedSeNr = 1;
+
             //! datei / app starten (callback)
             if (appStartCallback() < 0) 
             {
@@ -264,16 +271,35 @@ static struct answer *processRequest(struct request *reqPtr,
             break;
 
         case ReqData:
-            //! daten schreiben (callabck)
-            if (appWriteCallback(reqPtr->name, reqPtr->FlNr) < 0) 
+            
+            //! prüfen ob duplikate
+            if (reqPtr->SeNr == nextExpectedSeNr) //! erwartetes paket erhalten
             {
-                printf("server error schreiben\n");
-                answPtr->AnswType = AnswErr;
-            } 
-            else 
+                //! daten schreiben (callabck)
+                if (appWriteCallback(reqPtr->name, reqPtr->FlNr) < 0) 
+                {
+                    printf("server error schreiben\n");
+                    answPtr->AnswType = AnswErr;
+                } 
+                else 
+                {
+                    answPtr->AnswType = AnswOk;  
+                    answPtr->SeNo = reqPtr->SeNr;
+                    
+                    nextExpectedSeNr++; //! nächstes paket erwarten
+                }
+            }
+            else if (reqPtr->SeNr < nextExpectedSeNr) //! bereits geschriebenes daten erhalten
             {
-                answPtr->AnswType = AnswOk;  
+                printf("server duplikat %lu erhalten\n", reqPtr->SeNr);
+                
+                //! nichts schreiben, aber ok / ack senden
+                answPtr->AnswType = AnswOk;
                 answPtr->SeNo = reqPtr->SeNr;
+            }
+            else //! pakwet aus zukunft
+            {
+                return NULL;
             }
             break;
             
