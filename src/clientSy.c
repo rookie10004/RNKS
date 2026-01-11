@@ -10,10 +10,23 @@
 #include <netdb.h>
 #include <sys/time.h>
 #include <sys/select.h>
+#include <fcntl.h> //! filecontrol
+#include <time.h>
 
 #include "data.h"
 #include "config.h"
 #include "clientSy.h"
+
+//! zeit hilffunktion
+double getCurrentTime(void)
+{
+    //! unabhängig von system-uhr
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    //! sekunden + nanosekunden (genauigkeit)
+    return ts.tv_sec + (ts.tv_nsec / 1e9);
+}
 
 /*
  * clientSy.c
@@ -85,6 +98,18 @@ void initClient(char *name, const char *port)
         {
             continue; 
         }
+
+        //! socket timeout abrufen
+        int flags = fcntl(socketFd, F_GETFL, 0);
+
+        //! flag O_NONBLOCK hinzufügen
+        if (fcntl(socketFd, F_SETFL, flags | O_NONBLOCK) < 0) 
+        {
+            perror("client error fcntl");
+            exit(EXIT_FAILURE);
+        }
+
+        printf("client init für %s, %s\n", name, port);
         
         //! gefundene adresse in global variable kopieren
         memcpy(&serverAddr, current->ai_addr, current->ai_addrlen);
@@ -171,17 +196,23 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
 
 int arqSendHello(int winSize)
 {
-
     /* TODO:
-     *  - struct request für Hello vorbereiten (ReqType = ReqHello)
-     *  - Sequenznummern- und Fensterzustand initialisieren
-     *  - doRequest(...) aufrufen
-     *  - Antwort auswerten (AnswHello / AnswOk)
-     *  - bei Fehler einen Wert != 0 zurückgeben
+     * - struct request für Hello vorbereiten (ReqType = ReqHello)
+     * - Sequenznummern- und Fensterzustand initialisieren
+     * - doRequest(...) aufrufen
+     * - Antwort auswerten (AnswHello / AnswOk)
+     * - bei Fehler einen Wert != 0 zurückgeben
      */
 
     struct request req;     //! paket zu senden
     ssize_t numBytes;       //! anzahl gesendet/empfangen
+
+    //! variablen für timer und versuche
+    double startTime;       
+    double currentTime;     
+    int versuche = 0;       
+    const int maxVersuche = 5; //! error nach 5 versuchen
+    const double timeout = 3.0; //! wartezeit
 
     //! request ausfüllen
     memset(&req, 0, sizeof(req));   //! speicher auf 0
@@ -191,50 +222,88 @@ int arqSendHello(int winSize)
 
     printf("client sendet HALLO\n");
 
-    //! request über socket an server senden
-    numBytes = sendto(socketFd, 
-                      &req,
-                      sizeof(req), 
-                      0, 
-                      (struct sockaddr*)&serverAddr, //! addresse generisch casten
-                      serverAddrLen);
-
-    if (numBytes < 0) //! testen wieviele bytes gesendet
+    //! äußere schleife, wiederholt senden
+    do 
     {
-        perror("client sendto error");
-        return -1;
-    }
+        versuche++;
 
-    struct sockaddr_storage senderAddr; //! addresse wer geantwortet hat
-    socklen_t addrLen;    
-    struct answer ack;      //! antwort
+        //! request über socket an server senden
+        numBytes = sendto(socketFd, 
+                          &req,
+                          sizeof(req), 
+                          0, 
+                          (struct sockaddr*)&serverAddr, //! addresse generisch casten
+                          serverAddrLen);
 
-    //! auf antwort warten (!blocking!)
-    addrLen = sizeof(senderAddr);
-    
-    numBytes = recvfrom(socketFd, 
-                        &ack, //! quittung
-                        sizeof(ack), 
-                        0, 
-                        (struct sockaddr*)&senderAddr,
-                        &addrLen);
+        if (numBytes < 0) //! testen wieviele bytes gesendet
+        {
+            perror("client sendto error");
+            return -1;
+        }
 
-    if (numBytes < 0) //! testen wieviele bytes empfangen
-    {
-        perror("client recvfrom error");
-        return -1;
-    }
+        //! sendezeit merken
+        startTime = getCurrentTime();
 
-    //! prüfen ob antwort AnswHello / AnswOk
-    if (ack.AnswType == AnswHello || ack.AnswType == AnswOk) 
-    {
-        printf("client HELLO verbindung\n");
-        return 0; 
-    } else 
-    {
-        fprintf(stderr, "client ack error: %c\n", ack.AnswType);
-        return 1; 
-    }
+        struct sockaddr_storage senderAddr; //! addresse wer geantwortet hat
+        socklen_t addrLen;    
+        struct answer ack;      //! antwort
+
+        //! innere schleife, auf antwort warten
+        while(1)
+        {
+            //! auf antwort warten 
+            addrLen = sizeof(senderAddr);
+            memset(&ack, 0, sizeof(ack)); 
+            
+            numBytes = recvfrom(socketFd, 
+                                &ack, //! quittung
+                                sizeof(ack), 
+                                0, 
+                                (struct sockaddr*)&senderAddr,
+                                &addrLen);
+
+            //! antwort erhalten
+            if (numBytes > 0)
+            {
+                //! prüfen ob antwort AnswHello / AnswOk
+                if (ack.AnswType == AnswHello || ack.AnswType == AnswOk) 
+                {
+                    printf("client HELLO verbindung\n");
+                    return 0; 
+                } else 
+                {
+                    fprintf(stderr, "client unknown answer: %c\n", ack.AnswType);
+                }
+            }
+
+            //! keine antwort erhalten
+            if (numBytes < 0) //! testen wieviele bytes empfangen
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) //! error auswerten 
+                {
+                    //timeout prüfen
+                    currentTime = getCurrentTime();
+
+                    if ((currentTime - startTime) > timeout) 
+                    {
+                        printf("client timeout hello, versuch %d...\n", versuche);
+                        break; //! aus schleife austreten / neu senden
+                    }
+                    
+                    continue; //! timeout nochnicht erroicht
+                } 
+                else 
+                {
+                    perror("client recvfrom error"); //! anderer error 
+                    return -1;
+                }
+            }
+        } 
+
+    } while (versuche < maxVersuche); 
+
+    fprintf(stderr, "client hello gescheitert (timeout)\n");
+    return -1;
 }
 
 int arqSendData(const struct app_unit *app, int winSize)
@@ -264,65 +333,100 @@ int arqSendData(const struct app_unit *app, int winSize)
     
     printf("client paket nr. %lu (%lu bytes)\n", req.SeNr, req.FlNr);
 
-    //! daten senden
-    ssize_t numBytes;
-    numBytes = sendto(socketFd, 
-        &req, sizeof(req), 
-        0, 
-        (struct sockaddr*)&serverAddr, serverAddrLen);
-    
-    if (numBytes < 0) 
+    //! alles für timer & versuch counter
+    double startTime;
+    double currentTime;
+    int versuche = 0;
+    const int maxVersuche = 5;
+    const double timeout = 3.0;
+
+    //! äußere schleife für timeout wiederholungen
+    do 
     {
-        perror("cleint error sendto");
-        return -1;
-    }
-    
-    //! auf bestätigung warten (blockierend)
-    struct answer ack; //! paket vom server
-    socklen_t addrLen;
-    struct sockaddr_storage senderAddr;
-    addrLen = sizeof(senderAddr);
-    memset(&ack, 0, sizeof(ack)); //! speicher auf 0
+        versuche++;
 
-    numBytes = recvfrom(socketFd, 
-                        &ack, sizeof(ack), 
-                        0, 
-                        (struct sockaddr*)&senderAddr, &addrLen);
-
-    if (numBytes < 0) 
-    {
-        perror("client error recvfrom");
-        return -1;
-    }
-
-    if (ack.AnswType == AnswOk) //! server reagiert mit OK
-    {
-        printf("client paket %lu bestaetigt\n", currentSeqNum);
-
-        currentSeqNum++; //! zähler erhöht
+        //! daten senden
+        ssize_t numBytes;
+        numBytes = sendto(socketFd, 
+            &req,
+            sizeof(req), 
+            0, 
+            (struct sockaddr*)&serverAddr,
+            serverAddrLen);
         
-        return 0;
+        if (numBytes < 0) 
+        {
+            perror("cleint error sendto");
+            return -1;
+        }
+
+        startTime = getCurrentTime();
+
+        //! innere schleife zum warten auf antwort
+        while(1)
+        {
+            //! auf bestätigung warten 
+            struct answer ack; //! paket vom server
+            socklen_t addrLen;
+            struct sockaddr_storage senderAddr;
+
+            addrLen = sizeof(senderAddr);
+            memset(&ack, 0, sizeof(ack)); //! speicher auf 0
+
+            numBytes = recvfrom(socketFd, 
+                                &ack, sizeof(ack), 
+                                0, 
+                                (struct sockaddr*)&senderAddr,
+                                &addrLen);
+
+            //! antwort / ack erhalten
+            if (numBytes > 0) 
+            {
+                if (ack.AnswType == AnswOk || ack.AnswType == AnswHello) 
+                {
+                    printf("client paket %lu ack\n", currentSeqNum);
+                    currentSeqNum++;
+                    return 0; 
+                }
+            }
+
+            //! keine antwort
+            if (numBytes < 0) 
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) //! error testen (automatisch vom operationssystem gesetzt)
+                {
+                    currentTime = getCurrentTime(); //! zeit abfragen
+                    if ((currentTime - startTime) > timeout) //! aus schleife austreten, wenn timout abgelaufen
+                    {
+                        printf("client timeout für %lu sende versuch %d...\n", currentSeqNum, versuche);
+                        break; 
+                    }
+                    
+                    //! bleibt in schleife, wenn kein timeout erriecht 
+                    continue;
+
+                } else 
+                {
+                    perror("client recvfrom error"); //! anderer error
+                    return -1;
+                }
+            }
+        }
         
     } 
-    else if (ack.AnswType == AnswErr) 
-    { 
-        fprintf(stderr, "client error vom server\n");
-        return 1;
-    }
-    else 
-    {
-        fprintf(stderr, "client ack error %c\n", ack.AnswType);
-        return 1;
-    }
+    while (versuche < maxVersuche);
+
+    fprintf(stderr, "client gibt auf, server nicht erriechbar");
+    return -1;
 }
 
-int arqSendClose(int winSize)
+int arqSendClose(int winSize) 
 {
     /* TODO:
-     *  - struct request mit ReqClose vorbereiten
-     *  - doRequest(...) aufrufen
-     *  - Antwort auswerten
-     *  - bei Fehler einen Wert != 0 zurückgeben
+     * - struct request mit ReqClose vorbereiten
+     * - doRequest(...) aufrufen
+     * - Antwort auswerten
+     * - bei Fehler einen Wert != 0 zurückgeben
      */
   
     struct request req;
@@ -331,6 +435,13 @@ int arqSendClose(int winSize)
     socklen_t addrLen;
     struct sockaddr_storage senderAddr;
 
+    //! timer und versuche 
+    double startTime;
+    double currentTime;
+    int versuche = 0;
+    const int maxVersuche = 3; 
+    const double timeout = 3.0; 
+
     memset(&req, 0, sizeof(req));
     req.ReqType = ReqClose;
     req.SeNr = 0;
@@ -338,37 +449,71 @@ int arqSendClose(int winSize)
 
     printf("client sende close\n");
 
-    numBytes = sendto(socketFd, 
-                      &req, sizeof(req), 
-                      0, 
-                      (struct sockaddr *)&serverAddr, serverAddrLen);
-
-    if (numBytes < 0) 
+    //! äußere schleife / close senden
+    do 
     {
-        perror("client error sendto (close)");
-        return -1;
-    }
+        versuche++;
 
-    addrLen = sizeof(senderAddr);
-    numBytes = recvfrom(socketFd, 
-                        &ack, sizeof(ack), 
-                        0, 
-                        (struct sockaddr *)&senderAddr, &addrLen);
+        numBytes = sendto(socketFd, 
+                          &req, sizeof(req), 
+                          0, 
+                          (struct sockaddr *)&serverAddr, serverAddrLen);
 
-    if (numBytes < 0) 
-    {
-        perror("client error revcfrom (ack-close)");
-        return -1;
-    }
+        if (numBytes < 0) 
+        {
+            perror("client error sendto (close)");
+            return -1;
+        }
 
-    if (ack.AnswType == AnswOk) 
-    {
-        printf("client close bestätigt\n");
-        return 0;
-    } 
-    else {
+        //! timer starten
+        startTime = getCurrentTime();
 
-        fprintf(stderr, "client error close abgelehnt\n");
-        return 1;
-    }
+        //! innere schleife wartet auf antwort
+        while(1)
+        {
+            addrLen = sizeof(senderAddr);
+            numBytes = recvfrom(socketFd, 
+                                &ack, sizeof(ack), 
+                                0, 
+                                (struct sockaddr *)&senderAddr, &addrLen);
+
+            //! antwort erhalten
+            if (numBytes > 0)
+            {
+                if (ack.AnswType == AnswOk) 
+                {
+                    printf("client close bestätigt\n");
+                    return 0;
+                } 
+                else {
+                    fprintf(stderr, "client error close abgelehnt\n");
+                    return 1;
+                }
+            }
+
+            //! keine antwort
+            if (numBytes < 0) 
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) //! error auswerten
+                {
+                    currentTime = getCurrentTime(); //! zeit testen
+                    if ((currentTime - startTime) > timeout) //! testen ob timeout erreicht
+                    {
+                        break; //! aus loop ausbrechen / close neu senden
+                    }
+
+                    continue; //! weiter warten
+                } 
+                else 
+                {
+                    perror("client error revcfrom (ack-close)");
+                    return -1;
+                }
+            }
+        } 
+
+    } while (versuche < maxVersuche); 
+
+    fprintf(stderr, "client close timeout\n");
+    return -1;
 }
