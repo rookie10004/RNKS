@@ -116,8 +116,6 @@ void initClient(char *name, const char *port)
             perror("client error fcntl");
             exit(EXIT_FAILURE);
         }
-
-        printf("client init für %s, %s\n", name, port);
         
         //! gefundene adresse in global variable kopieren
         memcpy(&serverAddr, current->ai_addr, current->ai_addrlen);
@@ -197,7 +195,7 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
     if (req->ReqType == ReqHello || req->ReqType == ReqClose)
     {
         int versuche = 0;
-        const int maxVersuche = (req->ReqType == ReqHello) ? 5 : 3;
+        const int maxVersuche = 5;
 
         //! globale zähler zurücksetzen
         if (req->ReqType == ReqHello) 
@@ -224,7 +222,7 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
             //! sendezeit merken
             startTime = getCurrentTime();
 
-            //! innere schleife: aarten auf ACK oder ablauf des time slots
+            //! innere schleife: warten auf ACK oder ablauf des time slots
             while(1)
             {
                 fd_set socketDataFds; //! sockets die überwacht werden sollen (für select)
@@ -285,6 +283,8 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
     //! sliding window daten
     else if (req->ReqType == ReqData)
     {
+        startTime = getCurrentTime();
+
         //! äußere schleife um warten und acks zu sammeln
         while(1)
         {
@@ -298,9 +298,6 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
             {
                 *windowFull = 1;
             }
-
-            //! fenster voll, warten timer
-            startTime = getCurrentTime();
 
             //! innere schleife: warten auf ACK oder ablauf des time slots
             while(1)
@@ -352,7 +349,7 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
                             currentNum++;
                         }
                         
-                        //! timer neustarten
+                        //! timer neustarten wenn "großes" timout erreicht
                         startTime = getCurrentTime();
                     }
                     
@@ -386,7 +383,9 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
                                 baseNum = ack.SeNo + 1;
                                 packetCount -= confirmed;
                                 
-                                break; //! wieder platz im fesnter, sofort weiter
+                                startTime = getCurrentTime();
+
+                                break; //! wieder platz im fesnter
                             }
                         }
                     }

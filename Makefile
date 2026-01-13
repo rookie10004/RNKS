@@ -13,5 +13,5 @@ rs:
 	./build/server -f output
 
 rc:
-	./build/client -f input
+	./build/client -a ::1 -f input -w 5
 

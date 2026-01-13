@@ -127,6 +127,7 @@ int main(int argc, char *argv[])
      *   - bei Erfolg: FILE* in fp ablegen
      */
 
+    
     fp = fopen(filename, "rb"); //! datei in binary read öffnen
     if (fp == NULL) 
     {
