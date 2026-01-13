@@ -59,6 +59,15 @@ int socketFd = -1; //! socked file descriptor
 struct sockaddr_storage serverAddr; //! server adresse
 socklen_t serverAddrLen = 0; //! Länge IPv6 Adresse (die wir wirklich nutzen)
 
+//! RINGPUFFER: 
+//! Index=(Sequenznummer−1)%MAX_SIZE
+#define MAX_WINDOW_SIZE 10 //! sliding window buffer size
+static struct request windowBuffer[MAX_WINDOW_SIZE]; //! speicher für gesendete pakete
+static int packetCount = 0; //! zählen wieviele pakete unterwegs
+
+static unsigned long baseNum = 1; //! altestes unbestätigstes Paket (linker Fensterrand)
+static unsigned long nextNum = 1; //! nächstes neues Paket (rechter Fensterrand)
+
 /* --------------------------------------------------------------- */
 /*  Initialisierung / Abschluss                                   */
 /* --------------------------------------------------------------- */
@@ -214,6 +223,11 @@ int arqSendHello(int winSize)
     const int maxVersuche = 5; //! error nach 5 versuchen
     const double timeout = 3.0; //! wartezeit
 
+    //! neue verbindung, daten zurücksetzen
+    baseNum = 1;
+    nextNum = 1;
+    packetCount = 0;
+
     //! request ausfüllen
     memset(&req, 0, sizeof(req));   //! speicher auf 0
     req.ReqType = ReqHello;         
@@ -281,7 +295,7 @@ int arqSendHello(int winSize)
             {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) //! error auswerten 
                 {
-                    //timeout prüfen
+                    //! timeout prüfen
                     currentTime = getCurrentTime();
 
                     if ((currentTime - startTime) > timeout) 
@@ -309,70 +323,44 @@ int arqSendHello(int winSize)
 int arqSendData(const struct app_unit *app, int winSize)
 {
     /* TODO:
-     *  - aus app eine struct request mit ReqType = ReqData erzeugen:
-     *       * FlNr = app->len (ggf. begrenzen auf PufferSize)
-     *       * SeNr = laufende Paketnummer (z.B. statischer Zähler)
-     *       * Nutzdaten kopieren
-     *  - doRequest(...) aufrufen
-     *  - Antwort auswerten (AnswOk/AnswWarn/AnswErr)
-	 *  - bei bufferFull oder retransmission doRequest mit unverändertem req erneut aufrufen
-     *  - bei Fehler einen Wert != 0 zurückgeben
+     * - Sliding Window Logik implementieren
+     * - ACKs einsammeln (Polling)
+     * - Nur Senden, wenn Platz im Fenster ist
      */
-    
-    static unsigned long currentSeqNum = 1; //! zähler für pakete
 
-    struct request req; //! paket vom client
+    struct request *reqPtr; //! zeiger auf paket im puffer
     
-    //! header ausfüllen
-    memset(&req, 0, sizeof(req)); //! speicher auf 0
-    req.ReqType = ReqData; //! typ ist DATA
-    req.SeNr = currentSeqNum; //! aktuelle paket nummer
-    req.FlNr = app->len; //! bytes an nutzdaten
-    
-    memcpy(req.name, app->data, app->len); //! daten in "name" kopieren
-    
-    printf("client paket nr. %lu (%lu bytes)\n", req.SeNr, req.FlNr);
-
     //! alles für timer & versuch counter
     double startTime;
     double currentTime;
-    int versuche = 0;
-    const int maxVersuche = 5;
     const double timeout = 3.0;
 
-    //! äußere schleife für timeout wiederholungen
-    do 
+    //! äußere schleife um warten und acks zu sammeln
+    while(1)
     {
-        versuche++;
-
-        //! daten senden
-        ssize_t numBytes;
-        numBytes = sendto(socketFd, 
-            &req,
-            sizeof(req), 
-            0, 
-            (struct sockaddr*)&serverAddr,
-            serverAddrLen);
-        
-        if (numBytes < 0) 
+        //! prüfen ob platz imfesnter
+        if (packetCount < winSize)
         {
-            perror("cleint error sendto");
-            return -1;
+            //! warte-schleife verlassen
+            break; 
         }
 
+        //! fenster voll, warten timer
         startTime = getCurrentTime();
 
-        //! innere schleife zum warten auf antwort
+        //! innere schleife zum warten auf antwort (Polling)
         while(1)
         {
             //! auf bestätigung warten 
             struct answer ack; //! paket vom server
             socklen_t addrLen;
             struct sockaddr_storage senderAddr;
+            ssize_t numBytes;
 
             addrLen = sizeof(senderAddr);
             memset(&ack, 0, sizeof(ack)); //! speicher auf 0
 
+            //! blockiert nicht
             numBytes = recvfrom(socketFd, 
                                 &ack, sizeof(ack), 
                                 0, 
@@ -382,24 +370,42 @@ int arqSendData(const struct app_unit *app, int winSize)
             //! antwort / ack erhalten
             if (numBytes > 0) 
             {
-                if (ack.AnswType == AnswOk || ack.AnswType == AnswHello) 
+                if (ack.AnswType == AnswOk) 
                 {
-                    printf("client paket %lu ack\n", currentSeqNum);
-                    currentSeqNum++;
-                    return 0; 
+                    //! prüfen ob ack größer als linker fensterrand
+                    if (ack.SeNo >= baseNum)
+                    {
+                        printf("client ack erhalten %lu (Fenster bewegt sich)\n", ack.SeNo);
+                        
+                        //! anzahl bestätigster poakete
+                        unsigned long confirmed = (ack.SeNo - baseNum) + 1;
+                        
+                        //! fenster und zähler aktualisieren
+                        baseNum = ack.SeNo + 1;
+                        packetCount -= confirmed;
+                        
+                        break; //! wieder platz im fesnter
+                    }
                 }
             }
 
-            //! keine antwort
+            //! keine antwort (oder fehler)
             if (numBytes < 0) 
             {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) //! error testen (automatisch vom operationssystem gesetzt)
                 {
                     currentTime = getCurrentTime(); //! zeit abfragen
-                    if ((currentTime - startTime) > timeout) //! aus schleife austreten, wenn timout abgelaufen
+                    if ((currentTime - startTime) > timeout) //! timeout abgelaufen
                     {
-                        printf("client timeout für %lu sende versuch %d...\n", currentSeqNum, versuche);
-                        break; 
+                        fprintf(stderr, "client timeout, neu senden %lu\n", baseNum);
+                        
+                        //! ältestes paket nochmal senden
+                        int idx = (baseNum - 1) % MAX_WINDOW_SIZE;
+                        sendto(socketFd, &windowBuffer[idx], sizeof(struct request), 0, (struct sockaddr*)&serverAddr, serverAddrLen);
+                        
+                        //! timer neu starten
+                        startTime = getCurrentTime();
+                        continue; 
                     }
                     
                     //! bleibt in schleife, wenn kein timeout erriecht 
@@ -411,13 +417,44 @@ int arqSendData(const struct app_unit *app, int winSize)
                     return -1;
                 }
             }
-        }
-        
+        } 
     } 
-    while (versuche < maxVersuche);
 
-    fprintf(stderr, "client gibt auf, server nicht erriechbar");
-    return -1;
+
+    //! fenster nicht voll, platz berechnen
+    int bufferIndex = (nextNum - 1) % MAX_WINDOW_SIZE;
+    reqPtr = &windowBuffer[bufferIndex];
+
+    //! header ausfüllen (direkt im Puffer)
+    memset(reqPtr, 0, sizeof(struct request)); //! speicher auf 0
+    reqPtr->ReqType = ReqData; //! typ ist DATA
+    reqPtr->SeNr = nextNum; //! aktuelle paket nummer (globaler Zähler)
+    reqPtr->FlNr = app->len; //! bytes an nutzdaten
+    
+    memcpy(reqPtr->name, app->data, app->len); //! daten in "name" kopieren
+    
+    printf("client sende paket nr. %lu (in flight: %d)\n", reqPtr->SeNr, packetCount + 1);
+
+    //! daten senden
+    ssize_t numBytes;
+    numBytes = sendto(socketFd, 
+        reqPtr, 
+        sizeof(struct request), 
+        0, 
+        (struct sockaddr*)&serverAddr,
+        serverAddrLen);
+    
+    if (numBytes < 0) 
+    {
+        perror("cleint error sendto");
+        return -1;
+    }
+
+    //! variablen nach sendne aktualisieren
+    packetCount++;
+    nextNum++;
+
+    return 0;
 }
 
 int arqSendClose(int winSize) 
