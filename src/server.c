@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "data.h"
 #include "config.h"
@@ -104,6 +105,8 @@ static void appEndTransfer(void)
 
 int main(int argc, char *argv[])
 {
+    srand(time(NULL)); //! rng seet mit aktueller zeit setzen
+
     const char *port = DEFAULT_PORT;
     double lossReq   = 0.0;
     double lossAck   = 0.0;

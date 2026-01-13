@@ -260,28 +260,19 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
                 }
                 else //! daten bereit
                 {
-                    if (FD_ISSET(socketFd, &socketDataFds)) //!wird von select gesetzt, wenn daten 
+                    if (FD_ISSET(socketFd, &socketDataFds)) 
                     {
                         addrLen = sizeof(senderAddr);
                         memset(&ack, 0, sizeof(ack));
 
-                        //! daten lesem
                         numBytes = recvfrom(socketFd, &ack, sizeof(ack), 0, 
                                             (struct sockaddr*)&senderAddr, &addrLen);
 
-                        if (numBytes > 0 && ack.AnswType == AnswOk) //!fenster sliden
+                        //! antwort testen
+                        if (numBytes > 0 && (ack.AnswType == AnswOk || ack.AnswType == AnswHello)) 
                         {
-                            if (ack.SeNo >= baseNum) 
-                            {
-                                printf("client ack erhalten %lu\n", ack.SeNo);
-                                unsigned long confirmed = (ack.SeNo - baseNum) + 1;
-                                
-                                //!globale variablen aktualisieren
-                                baseNum = ack.SeNo + 1;
-                                packetCount -= confirmed;
-
-                                break; 
-                            }
+                            printf("client ack empfangen: Typ %c, SeNo %lu\n", ack.AnswType, ack.SeNo);
+                            return &ack; 
                         }
                     }
                 }
@@ -493,24 +484,94 @@ int arqSendData(const struct app_unit *app, int winSize)
 
 int arqSendClose(int winSize) 
 {
-    /* TODO:
-     * - struct request mit ReqClose vorbereiten
-     * - doRequest(...) aufrufen
-     * - Antwort auswerten
-     * - bei Fehler einen Wert != 0 zurückgeben
-     */
-  
+    printf("client warten auf letzte ACKs...\n");
+
+    double startTime = getCurrentTime(); 
+    double currentTime;
+    const double timeout = 3.0;
+    
+    //! läuft solange noch unbestätigte daten da sind
+    while (packetCount > 0)
+    {
+        fd_set socketDataFds; //! sockets die überwacht werden sollen (für select)
+        struct timeval tv;
+
+        FD_ZERO(&socketDataFds);
+        FD_SET(socketFd, &socketDataFds);
+
+        tv.tv_sec = 0; 
+        tv.tv_usec = 100 * 1000; //! 100ms warten
+
+        //! schlafen bis daten oder timout (100ms)
+        //! socket + 1, weil er alle sockets davor prüft 
+        //! lässt dockets mit daten in readfds stehen, wird später geprüft
+        //! setzt tv zurück
+        int retval = select(socketFd + 1, &socketDataFds, NULL, NULL, &tv);
+
+        if (retval == -1) 
+        {
+            perror("client select error (close-wait)");
+            return -1;
+        }
+        else if (retval == 0) //! timeout (100ms slot vorbei)
+        {
+            currentTime = getCurrentTime();
+            if ((currentTime - startTime) > timeout) //! "großer" timeout, requests neu senden
+            {
+                printf("client timeout in close-phase (base %lu). retransmit...\n", baseNum);
+                unsigned long currentNum = baseNum;
+                while (currentNum < nextNum) 
+                {
+                    int idx = (currentNum - 1) % MAX_WINDOW_SIZE;
+                    ssize_t res = sendto(socketFd, &windowBuffer[idx], sizeof(struct request), 0, (struct sockaddr*)&serverAddr, serverAddrLen);
+                    
+                    if (res < 0) perror("client close-resend error");
+                    
+                    currentNum++;
+                }
+                startTime = getCurrentTime(); 
+            }
+            continue; 
+        }
+        else 
+        {
+            if (FD_ISSET(socketFd, &socketDataFds)) //! von select gesetzt, daten in unserem socket
+            {
+                struct answer ack;
+                struct sockaddr_storage senderAddr;
+                socklen_t addrLen = sizeof(senderAddr);
+                
+                ssize_t numBytes = recvfrom(socketFd, &ack, sizeof(ack), 0, (struct sockaddr*)&senderAddr, &addrLen);
+
+                if (numBytes > 0 && ack.AnswType == AnswOk) 
+                {
+                    if (ack.SeNo >= baseNum)
+                    {
+                        printf("client ack in close-phase %lu\n", ack.SeNo);
+                        unsigned long confirmed = (ack.SeNo - baseNum) + 1;
+                        baseNum = ack.SeNo + 1;
+                        packetCount -= confirmed;
+                        
+                        startTime = getCurrentTime();
+                    }
+                }
+            }
+        }
+    }
+
+    //! close senden
     struct request req;
     memset(&req, 0, sizeof(req));
     req.ReqType = ReqClose;
     req.SeNr = 0;
     req.FlNr = 0;
 
-    printf("client sende close\n");
+    printf("client sende close (buffer leer)\n");
 
     struct answer *ans = doRequest(&req, winSize, NULL, NULL);
 
-    if (ans != NULL && ans->AnswType == AnswOk) {
+    if (ans != NULL && ans->AnswType == AnswOk) 
+    {
         printf("client close bestätigt\n");
         return 0;
     }
