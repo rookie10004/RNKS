@@ -10,7 +10,6 @@
 #include <netdb.h>
 #include <sys/time.h>
 #include <sys/select.h>
-#include <fcntl.h> //! filecontrol
 #include <time.h>
 
 #include "data.h"
@@ -146,7 +145,7 @@ void closeClient(void)
      *  - globale Zustandsvariablen zurücksetzen
      */
 
-    if (socketFd >= 0) //! wenn offenes socket, dann schließen
+    if (socketFd >= 0) //! wenn offenes socket, dann schließenW
     {
         close(socketFd); 
         socketFd = -1;   
@@ -225,45 +224,68 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
             //! sendezeit merken
             startTime = getCurrentTime();
 
-            //! innere schleife, auf antwort warten
+            //! innere schleife: aarten auf ACK oder ablauf des time slots
             while(1)
             {
-                addrLen = sizeof(senderAddr);
-                memset(&ack, 0, sizeof(ack)); 
-                
-                numBytes = recvfrom(socketFd, &ack, sizeof(ack), 0, 
-                                    (struct sockaddr*)&senderAddr, &addrLen);
+                fd_set socketDataFds; //! sockets die überwacht werden sollen (für select)
+                struct timeval tv; //! zeit
 
-                //! antwort erhalten
-                if (numBytes > 0)
+                FD_ZERO(&socketDataFds); //! liste leeren
+                FD_SET(socketFd, &socketDataFds); //! offenes socket hinzufügen
+
+                tv.tv_sec = 0; 
+                tv.tv_usec = 100 * 1000; //!100ms timeout setzen
+
+                //! schlafen bis daten oder timout (100ms)
+                //! socket + 1, weil er alle sockets davor prüft 
+                //! lässt dockets mit daten in readfds stehen, wird später geprüft
+                //! setzt tv zurück
+                int retval = select(socketFd + 1, &socketDataFds, NULL, NULL, &tv);
+
+                if (retval == -1) 
                 {
-                    if (ack.AnswType == AnswHello || ack.AnswType == AnswOk) 
-                    {
-                        return &ack; 
-                    } 
+                    perror("client select error");
+                    return NULL; 
                 }
-
-                //! keine antwort erhalten
-                if (numBytes < 0) 
+                else if (retval == 0) //! timeout (100ms)
                 {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) 
+                    //! prüfen ob "großes" timeout 
+                    currentTime = getCurrentTime();
+                    if ((currentTime - startTime) > timeout) 
                     {
-                        //! timeout prüfen
-                        currentTime = getCurrentTime();
-                        if ((currentTime - startTime) > timeout) 
+                        printf("client timeout hello -> neu senden\n");
+                        break; 
+                    }
+                    continue; 
+                }
+                else //! daten bereit
+                {
+                    if (FD_ISSET(socketFd, &socketDataFds)) //!wird von select gesetzt, wenn daten 
+                    {
+                        addrLen = sizeof(senderAddr);
+                        memset(&ack, 0, sizeof(ack));
+
+                        //! daten lesem
+                        numBytes = recvfrom(socketFd, &ack, sizeof(ack), 0, 
+                                            (struct sockaddr*)&senderAddr, &addrLen);
+
+                        if (numBytes > 0 && ack.AnswType == AnswOk) //!fenster sliden
                         {
-                            printf("client timeout, versuch %d...\n", versuche);
-                            break; //! aus schleife austreten / neu senden
+                            if (ack.SeNo >= baseNum) 
+                            {
+                                printf("client ack erhalten %lu\n", ack.SeNo);
+                                unsigned long confirmed = (ack.SeNo - baseNum) + 1;
+                                
+                                //!globale variablen aktualisieren
+                                baseNum = ack.SeNo + 1;
+                                packetCount -= confirmed;
+
+                                break; 
+                            }
                         }
-                        continue; //! timeout nochnicht erroicht
-                    } 
-                    else 
-                    {
-                        perror("client recvfrom error"); 
-                        return NULL;
                     }
                 }
-            } 
+            }
         } while (versuche < maxVersuche); 
         
         return NULL; 
@@ -289,75 +311,96 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
             //! fenster voll, warten timer
             startTime = getCurrentTime();
 
-            //! innere schleife zum warten auf antwort (Polling)
+            //! innere schleife: warten auf ACK oder ablauf des time slots
             while(1)
             {
-                addrLen = sizeof(senderAddr);
-                memset(&ack, 0, sizeof(ack)); 
+                fd_set socketDataFds; //! sockets die überwacht werden sollen (für select)
+                struct timeval tv; //! zeit
 
-                numBytes = recvfrom(socketFd, &ack, sizeof(ack), 0, 
-                                    (struct sockaddr*)&senderAddr, &addrLen);
+                FD_ZERO(&socketDataFds); //! liste leeren
+                FD_SET(socketFd, &socketDataFds); //! offenes socket hinzufügen
 
-                //! antwort / ack erhalten
-                if (numBytes > 0 && ack.AnswType == AnswOk) 
+                tv.tv_sec = 0; 
+                tv.tv_usec = 100 * 1000; //!100ms timeout setzen
+
+                //! schlafen bis daten oder timout (100ms)
+                //! socket + 1, weil er alle sockets davor prüft 
+                //! lässt dockets mit daten in socketDataFds stehen, wird später geprüft
+                //! setzt tv zurück
+                int retval = select(socketFd + 1, &socketDataFds, NULL, NULL, &tv);
+
+                if (retval == -1) 
                 {
-                    //! prüfen ob ack größer als linker fensterrand
-                    if (ack.SeNo >= baseNum)
-                    {
-                        printf("client ack erhalten %lu (fenster slidet)\n", ack.SeNo);
-                        
-                        //! anzahl bestätigster poakete
-                        unsigned long confirmed = (ack.SeNo - baseNum) + 1;
-                        
-                        //! fenster und zähler aktualisieren
-                        baseNum = ack.SeNo + 1;
-                        packetCount -= confirmed;
-                        
-                        break; //! wieder platz im fesnter
-                    }
+                    perror("client select error");
+                    return NULL;
                 }
-
-                //! keine antwort (oder fehler)
-                if (numBytes < 0) 
+                else if (retval == 0) //!timout (100ms)
                 {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    //! prüfen ob "großes" timeout für retransmission erreicht
+                    currentTime = getCurrentTime();
+                    if ((currentTime - startTime) > timeout) 
                     {
-                        currentTime = getCurrentTime(); 
-                        if ((currentTime - startTime) > timeout) 
+                        printf("client timeout base %lu. starte go-back-n\n", baseNum);
+
+                        //! go back n: alle unbestätigten Pakete aus dem Buffer neu senden
+                        unsigned long currentNum = baseNum;
+                        while (currentNum < nextNum) 
                         {
-                            printf("client timeout base %lu. starte go-back-n\n", baseNum);
-
-                            //! GO-BACK-N: von base zu current alle Pakete neu senden
-                            unsigned long currentNum = baseNum;
-                            while (currentNum < nextNum) 
-                            {
-                                int idx = (currentNum - 1) % MAX_WINDOW_SIZE;
-                                
-                                ssize_t res = sendto(socketFd, 
-                                                     &windowBuffer[idx], 
-                                                     sizeof(struct request), 
-                                                     0, 
-                                                     (struct sockaddr*)&serverAddr, 
-                                                     serverAddrLen);
-                                if (res < 0) perror("client error resend");
-                                else printf("client resend paket %lu\n", currentNum);
-
-                                currentNum++;
-                            }
+                            int idx = (currentNum - 1) % MAX_WINDOW_SIZE;
                             
-                            //! timeout neu starten
-                            startTime = getCurrentTime();
-                            continue; 
+                            ssize_t res = sendto(socketFd, 
+                                                 &windowBuffer[idx], 
+                                                 sizeof(struct request), 
+                                                 0, 
+                                                 (struct sockaddr*)&serverAddr, 
+                                                 serverAddrLen);
+                            
+                            if (res < 0) perror("client error resend");
+                            else printf("client resend paket %lu\n", currentNum);
+
+                            currentNum++;
                         }
-                        continue;
-                    } 
-                    else 
+                        
+                        //! timer neustarten
+                        startTime = getCurrentTime();
+                    }
+                    
+                    //! Slot vorbei: aus innere schleife austreten 
+                    //! um in äußerer schleife ggf. EIN NEUES paket zu senden
+                    break; 
+                }
+                else //! daten bereit
+                {
+                    if (FD_ISSET(socketFd, &socketDataFds)) //!wird von select gesetzt, wenn daten
                     {
-                        perror("client recvfrom error");
-                        return NULL;
+                        addrLen = sizeof(senderAddr);
+                        memset(&ack, 0, sizeof(ack)); //! speicher auf 0
+
+                        //! daten lesen (blockiert nicht mehr, da select ok gab)
+                        numBytes = recvfrom(socketFd, &ack, sizeof(ack), 0, 
+                                            (struct sockaddr*)&senderAddr, &addrLen);
+
+                        //! antwort / ack erhalten
+                        if (numBytes > 0 && ack.AnswType == AnswOk) 
+                        {
+                            //! prüfen ob ack größer als linker fensterrand
+                            if (ack.SeNo >= baseNum)
+                            {
+                                printf("client ack erhalten %lu (fenster slidet)\n", ack.SeNo);
+                                
+                                //! anzahl bestätigster poakete
+                                unsigned long confirmed = (ack.SeNo - baseNum) + 1;
+                                
+                                //! fenster und zähler aktualisieren
+                                baseNum = ack.SeNo + 1;
+                                packetCount -= confirmed;
+                                
+                                break; //! wieder platz im fesnter, sofort weiter
+                            }
+                        }
                     }
                 }
-            } 
+            }
         } 
 
         if (windowFull) 
