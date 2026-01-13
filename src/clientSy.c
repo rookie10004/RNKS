@@ -375,7 +375,7 @@ int arqSendData(const struct app_unit *app, int winSize)
                     //! prüfen ob ack größer als linker fensterrand
                     if (ack.SeNo >= baseNum)
                     {
-                        printf("client ack erhalten %lu (Fenster bewegt sich)\n", ack.SeNo);
+                        printf("client ack erhalten %lu (fenster slidet)\n", ack.SeNo);
                         
                         //! anzahl bestätigster poakete
                         unsigned long confirmed = (ack.SeNo - baseNum) + 1;
@@ -395,20 +395,42 @@ int arqSendData(const struct app_unit *app, int winSize)
                 if (errno == EAGAIN || errno == EWOULDBLOCK) //! error testen (automatisch vom operationssystem gesetzt)
                 {
                     currentTime = getCurrentTime(); //! zeit abfragen
-                    if ((currentTime - startTime) > timeout) //! timeout abgelaufen
+                    if ((currentTime - startTime) > timeout) //! aus schleife austreten, wenn timout abgelaufen
                     {
-                        fprintf(stderr, "client timeout, neu senden %lu\n", baseNum);
+                        printf("client timeout base %lu. starte go-back-n\n", baseNum);
+
+                        //! GO-BACK-N: von base zu current alle Pakete neu senden
+                        unsigned long currentNum = baseNum;
+                        while (currentNum < nextNum) 
+                        {
+
+                            int idx = (currentNum - 1) % MAX_WINDOW_SIZE;
+                            
+                            ssize_t res = sendto(socketFd, 
+                                                 &windowBuffer[idx], 
+                                                 sizeof(struct request), 
+                                                 0, 
+                                                 (struct sockaddr*)&serverAddr, 
+                                                 serverAddrLen);
+                            
+                            if (res < 0) 
+                            {
+                                perror("client error resend");
+                            }
+                            else 
+                            {
+                                printf("client resend paket %lu\n", currentNum);
+                            }
+
+                            currentNum++;
+                        }
                         
-                        //! ältestes paket nochmal senden
-                        int idx = (baseNum - 1) % MAX_WINDOW_SIZE;
-                        sendto(socketFd, &windowBuffer[idx], sizeof(struct request), 0, (struct sockaddr*)&serverAddr, serverAddrLen);
-                        
-                        //! timer neu starten
+                        //! timeout neu starten
                         startTime = getCurrentTime();
                         continue; 
                     }
                     
-                    //! bleibt in schleife, wenn kein timeout erriecht 
+                    //! bleibt in schleife, wenn kein timeout oder ack erriecht 
                     continue;
 
                 } else 
@@ -433,7 +455,7 @@ int arqSendData(const struct app_unit *app, int winSize)
     
     memcpy(reqPtr->name, app->data, app->len); //! daten in "name" kopieren
     
-    printf("client sende paket nr. %lu (in flight: %d)\n", reqPtr->SeNr, packetCount + 1);
+    printf("client sende paket nr. %lu (anzahl: %d)\n", reqPtr->SeNr, packetCount + 1);
 
     //! daten senden
     ssize_t numBytes;
