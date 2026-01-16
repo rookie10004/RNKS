@@ -131,18 +131,18 @@ int main(int argc, char *argv[])
     fp = fopen(filename, "rb"); //! datei in binary read öffnen
     if (fp == NULL) 
     {
-        perror("client error datei oeffnen");
+        perror("client: ERROR datei oeffnen\n");
         exit(EXIT_FAILURE);
     }
 
-    printf("Client: sending file '%s'\n", filename);
+    printf("client: sending file '%s'\n", filename);
 
     /* ARQ-Client initialisieren */
     initClient((char *)server, port);
 
     /* Hello/Verbindungsaufbau */
     if (arqSendHello(atoi(windowSize)) != 0) {
-        fprintf(stderr, "Client: Hello failed, aborting.\n");
+        perror("client: ERROR hello failed, aborting\n");
         /* TODO: Datei ggf. schließen, falls sie bereits geöffnet wurde */
         closeClient();
         return EXIT_FAILURE;
@@ -165,7 +165,7 @@ int main(int argc, char *argv[])
         //! gelesene app + fenstergröße senden
         if (arqSendData(&app, atoi(windowSize)) != 0) //! solange wie senden erfolgreich
         {
-            fprintf(stderr, "client error senden %lu\n", packetCounter);
+            fprintf(stderr, "client: ERROR senden %lu\n", packetCounter);
             closeClient(); 
 
             if (fp) //! file pointer schließen
@@ -179,18 +179,18 @@ int main(int argc, char *argv[])
     //! prüfen ob erfolgreich gelesen / verpackt
     if (res < 0) 
     {
-        fprintf(stderr, "client error lesefehler\n");
+        perror("client: ERROR lesefehler\n");
     } 
     else 
     {
-        printf("datei erfolgreich gesendet (%lu pakete)\n", packetCounter);
+        printf("client: datei erfolgreich gesendet (%lu pakete)\n", packetCounter);
     }
     
 
     /* Close / Verbindungsabbau */
     if (arqSendClose(atoi(windowSize)) != 0) 
     {
-        fprintf(stderr, "Client: error while sending close.\n");
+        perror("client: ERROR while sending close\n");
     }
 
     /* TODO:

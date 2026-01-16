@@ -32,7 +32,7 @@ static int appStartTransfer(void)
     gFileOk = 0;
 
     if (!gOutputFile) {
-        fprintf(stderr, "Server: no output file specified.\n");
+        fprintf(stderr, "server: no output file specified\n");
         return -1;
     }
 
@@ -47,13 +47,13 @@ static int appStartTransfer(void)
 
     if (gFp == NULL) 
     {
-        perror("server error opening file");
+        perror("server: ERROR opening file\n");
         return -1;
     }
 
     gFileOk = 1; //! flag setzen
 
-    printf("Server: start transfer -> writing to '%s'\n", gOutputFile);
+    printf("server: start transfer -> writing to '%s'\n", gOutputFile);
     return 0;
 }
 
@@ -70,7 +70,7 @@ static int appWriteData(const char *buf, unsigned long len)
     
     if (!gFileOk || gFp == NULL) //! testen ob file okay
     {
-        fprintf(stderr, "server error file stuff\n");
+        perror("server: ERROR file stuff\n");
         return -1;
     }
     
@@ -94,10 +94,9 @@ static void appEndTransfer(void)
     {
         fclose(gFp);
         gFp = NULL; 
-        printf("server file close\n");
+        printf("server: file close\n");
     }
 
-    /* Status zurücksetzen */
     gFileOk = 0;
 }
 
@@ -166,12 +165,12 @@ int main(int argc, char *argv[])
         usage(argv[0]);
     }
 
-    printf("Server: listening on port %s\n", port);
-    printf("Server: lossReq = %f, lossAck = %f\n", lossReq, lossAck);
+    printf("server: listening on port %s\n", port);
+    printf("server: lossReq = %f, lossAck = %f\n", lossReq, lossAck);
 
     if (arqServerLoop(port, lossReq, lossAck,
                       appStartTransfer, appWriteData, appEndTransfer) < 0) {
-        fprintf(stderr, "Server: arqServerLoop failed\n");
+        perror("server: ERROR arqServerLoop failed\n");
         return EXIT_FAILURE;
     }
 

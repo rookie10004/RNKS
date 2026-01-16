@@ -1,4 +1,4 @@
-all: client server
+build: client server
 	
 client:
 	gcc -Wall -o build/client src/client.c src/clientSy.c src/error.c
@@ -14,4 +14,7 @@ rs:
 
 rc:
 	./build/client -a ::1 -f input -w 5
+
+loss:
+	./build/server -f output -r 0.3 -a 0.3
 

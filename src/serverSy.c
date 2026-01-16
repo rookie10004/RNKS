@@ -36,9 +36,9 @@
  *   - Zeiger auf die Anwendungscallbacks
  */
 
-struct sockaddr_storage clientAddr; //! wer hat gesendet
-socklen_t clientAddrLen = 0;        
-int socketFd = -1;                    //!socket file descriptor
+static struct sockaddr_storage clientAddr; //! wer hat gesendet
+static socklen_t clientAddrLen = 0;        
+static int socketFd = -1; //!socket file descriptor
 
 //! callbacks für process request / function pointer
 static appStartFn appStartCallback = NULL;
@@ -74,7 +74,7 @@ int initServer(const char *port)
     status = getaddrinfo(NULL, port, &hints, &result); //! NULL weil wir keine fremde IP suchen, (::1 loopback) jedes Paket nehmen
     if (status != 0) 
     {
-        fprintf(stderr, "server getaddrinfo error\n");
+        perror("server: ERROR getaddrinfo\n");
         return -1;
     }
 
@@ -85,11 +85,10 @@ int initServer(const char *port)
         socketFd = socket(current->ai_family, current->ai_socktype, current->ai_protocol); //! socket erstellen / öffnen
         if (socketFd == -1) //! nächster eintrag, bis erfolgreich
         {
-
             continue; 
         }
 
-        if (bind(socketFd, current->ai_addr, current->ai_addrlen) == 0) //! adresse binden (socket zum daten bereitstellen)
+        if (bind(socketFd, current->ai_addr, current->ai_addrlen) == 0) //! port dieses programms für socket reservieren 
         {
             break; 
         }
@@ -101,11 +100,11 @@ int initServer(const char *port)
 
     if (current == NULL)  //! testen ob überhaupt ein socket erstellt wurde oder (Ende der Liste erreicht)
     {
-        fprintf(stderr, "server kein socket für %s\n", port);
+        fprintf(stderr, "server: ERROR kein socket für %s\n", port);
         return -1;
     }
 
-    printf("server init für %s\n", port);
+    printf("server: init für %s\n", port);
 
     return 0;
 }
@@ -121,7 +120,6 @@ struct request *getRequest(void)
     */
 
     static struct request req; //! zu empfangende request
-    
     ssize_t numBytes;
 
     clientAddrLen = sizeof(clientAddr);
@@ -136,7 +134,7 @@ struct request *getRequest(void)
 
     if (numBytes < 0) //! testen wieviele bytes empfangen
     {
-        perror("server recvfrom error"); 
+        perror("server: ERROR recvfrom\n"); 
         return NULL; 
     }
 
@@ -163,10 +161,10 @@ int sendAnswer(struct answer *answerPtr)
 
     if (numBytes < 0) //! testen wieviele bytes gesendet
     {
-        perror("server sendAnswer error");
+        perror("server: ERROR sendAnswer\n");
         return -1;
     }
-
+ 
     return 0;
 }
 
@@ -184,6 +182,12 @@ int exitServer(void)
 
         socketFd = -1;
     }
+
+    clientAddrLen = 0;        
+    socketFd = -1; 
+    appStartCallback = NULL;
+    appWriteCallback = NULL;
+    appEndCallback = NULL;
 
     return 0;
 }
@@ -237,7 +241,7 @@ static struct answer *processRequest(struct request *reqPtr,
     double randomNum = (double)rand() / (double)RAND_MAX; //! zahl zwischen 0 und 1
     if (lossReq > 0.0 && randomNum < lossReq) //! paketverlust simulieren
     {
-        printf("server paketverlust\n");
+        fprintf(stderr, "server: ERROR paketverlust (expected %ld)\n", nextExpectedSeNr);
         return NULL; 
     }
 
@@ -253,7 +257,7 @@ static struct answer *processRequest(struct request *reqPtr,
     {
         //! neue verbindung
         case ReqHello:
-            printf("server HELLO empfangen\n");
+            printf("server: HELLO empfangen\n");
             
             //! erwartetes paket zurücksetzen
             nextExpectedSeNr = 1;
@@ -278,7 +282,7 @@ static struct answer *processRequest(struct request *reqPtr,
                 //! daten schreiben (callabck)
                 if (appWriteCallback(reqPtr->name, reqPtr->FlNr) < 0) 
                 {
-                    printf("server error schreiben\n");
+                    perror("server: ERROR schreiben\n");
                     answPtr->AnswType = AnswErr;
                 } 
                 else 
@@ -291,7 +295,7 @@ static struct answer *processRequest(struct request *reqPtr,
             }
             else if (reqPtr->SeNr < nextExpectedSeNr) //! bereits geschriebenes daten erhalten
             {
-                printf("server duplikat %lu erhalten\n", reqPtr->SeNr);
+                printf("server: duplikat %lu erhalten\n", reqPtr->SeNr);
                 
                 //! nichts schreiben, aber ok / ack senden
                 answPtr->AnswType = AnswOk;
@@ -304,7 +308,7 @@ static struct answer *processRequest(struct request *reqPtr,
             break;
             
         case ReqClose:
-            printf("server close empfangen \n");
+            printf("server: close empfangen \n");
             
             //! datei schließen (callback)
             appEndCallback();
@@ -357,7 +361,7 @@ int arqServerLoop(const char *port,
         return -1;
     }
 
-    printf("server wartet auf pakete\n");
+    printf("server: wartet auf pakete\n");
 
     while (1) 
     {
@@ -378,7 +382,7 @@ int arqServerLoop(const char *port,
         double randomNum = (double)rand() / (double)RAND_MAX; //! zahl zwischen 0 und 1
         if (lossAck > 0.0 && randomNum < lossAck) //! ack verlust simulieren
         {
-            printf("server ack verlust\n");
+            perror("server: ERROR ack verlust\n");
             continue;
         }
 
