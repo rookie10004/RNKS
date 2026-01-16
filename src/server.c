@@ -8,7 +8,7 @@
 #include "config.h"
 #include "serverSy.h"
 
-/* Anwendungszustand: Ausgabedatei */
+/* Anwendungszustand: Ausgabedateio */
 static const char *gOutputFile = NULL;
 static FILE       *gFp         = NULL;
 static int         gFileOk     = 0;
