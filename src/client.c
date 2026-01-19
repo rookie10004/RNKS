@@ -39,13 +39,12 @@ static int readAppUnit(struct app_unit *app, FILE *f)
     memset(app->data, 0, BufferSize); //! speicher auf 0
     app->len = 0;
     
-    size_t itemsRead; //! wieviel bytes wirklich gelesen 
-    itemsRead = fread(app->data, 1, BufferSize, f); //! 512 bytes lesen von file in daten
-
-    if (itemsRead > 0) //! daten erfolgreich gelesen
+    //!fgets liest bis /n oder BufferSize (zeilenweise)
+    //!liefert null terminierten string
+    if (fgets(app->data, BufferSize, f) != NULL) 
     {
-        app->len = itemsRead;
-        return 1;
+        app->len = strlen(app->data);
+        return 1; 
     }
 
     if (feof(f)) //! ende der datei erreicht
@@ -128,7 +127,7 @@ int main(int argc, char *argv[])
      */
 
     
-    fp = fopen(filename, "rb"); //! datei in binary read öffnen
+    fp = fopen(filename, "r"); //! datei zum lesen öffnen (nicht binary, damit zeilenweise funktioniert)
     if (fp == NULL) 
     {
         perror("client: ERROR datei oeffnen\n");
