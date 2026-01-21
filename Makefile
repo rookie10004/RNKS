@@ -13,8 +13,15 @@ rs:
 	./build/server -f output
 
 rc:
-	./build/client -a ::1 -f input -w 3
+	./build/client -a ::1 -f input -w 10
 
 loss:
 	./build/server -f output -r 0.3 -a 0.3
+
+ack:
+	./build/server -f output -a 0.3
+
+req:
+	./build/server -f output -r 0.3
+
 

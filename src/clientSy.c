@@ -296,7 +296,10 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
     else if (req->ReqType == ReqData)
     {
         //! timer initialisieren (beim ersten paket)
-        if (packetCount == 0) startTime = getCurrentTime();
+        if (packetCount == 0) 
+        {
+            startTime = getCurrentTime();
+        }
 
         //! äußere schleife um warten und acks zu sammeln / resenden
         while(1)
