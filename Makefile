@@ -13,7 +13,7 @@ rs:
 	./build/server -f output
 
 rc:
-	./build/client -a ::1 -f input -w 10
+	./build/client -a ::1 -f src/config.h -w 10
 
 loss:
 	./build/server -f output -r 0.3 -a 0.3
@@ -21,7 +21,7 @@ loss:
 ack:
 	./build/server -f output -a 0.3
 
-req:
+req: 
 	./build/server -f output -r 0.3
 
 

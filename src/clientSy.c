@@ -68,7 +68,7 @@ static unsigned long baseNum = 1; //! altestes unbestätigstes Paket (linker Fen
 static unsigned long nextNum = 1; //! nächstes neues Paket (rechter Fensterrand)
 
 static const long timeSlot = 100000; //! 100ms slot
-static const double timeout = 3.0; //! 3s timeout
+static const double timeout = 0.3; //! 3s timeout
 
 /* ---------------------------------------------------------------  */
 /*  Initialisierung / Abschluss                                     */
@@ -348,14 +348,7 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
                 continue; 
             }
 
-            //! prüfen ob platz im fenster
-            if (packetCount < winSize)
-            {
-                break; //! platz vorhanden, weiter zum senden (unten)
-            }
-
             //! warten auf ACK oder ablauf des time slots (1 durchlauf)
-            
             fd_set socketDataFds; //! sockets die überwacht werden sollen (für select)
             
             FD_ZERO(&socketDataFds); //! liste leeren
@@ -400,6 +393,11 @@ static struct answer *doRequest(struct request *req, int winSize, int *windowFul
                         startTime = getCurrentTime();
                     }
                 }
+            }
+
+            if (packetCount < winSize )
+            {
+                break;
             }
         } 
 
